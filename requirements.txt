@@ -1,0 +1,7 @@
+streamlit>=1.63
+spiceypy
+pvlib
+scikit-learn
+numpy
+pandas
+plotly
