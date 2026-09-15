@@ -7,7 +7,9 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import spiceypy as spice
+import streamlit.components.v1 as components
 import streamlit as st
 
 from demand_model import predict_demand
@@ -16,7 +18,7 @@ from solar import expected_solar_output_pct
 from transit import TRANSIT_PEAK_UTC, get_sun_geometry, get_transit_info, load_kernels
 
 st.set_page_config(
-    page_title="PHOBOS SENTINEL // Mars Microgrid",
+    page_title="phobosgrid // Mars Microgrid",
     page_icon="🔴",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -71,7 +73,8 @@ def _boot():
 
 _boot()
 
-MISSION_DAY = TRANSIT_PEAK_UTC.date()
+LIVE_NOW = datetime.now(timezone.utc)
+MISSION_DAY = LIVE_NOW.date()
 
 st.sidebar.markdown("**MISSION // EQUATORIAL HAB-01**")
 st.sidebar.caption("Site: 0°N, 0°E  ·  Frame: IAU_MARS  ·  Kernels: de440s + mar099s")
@@ -80,12 +83,19 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 
-hour = st.sidebar.slider("Hour of day (UTC)", 0, 23, TRANSIT_PEAK_UTC.hour)
+live_mode = st.sidebar.toggle("Live mode", value=True)
+st.sidebar.caption("Live mode keeps the clock current without refreshing the page.")
+
+current_time = datetime.now(timezone.utc) if live_mode else LIVE_NOW
+
+hour = st.sidebar.slider("Hour of day (UTC)", 0, 23, TRANSIT_PEAK_UTC.hour, disabled=live_mode)
 jump = st.sidebar.toggle("Jump to Phobos transit peak", value=True)
 greenhouse = st.sidebar.toggle("Greenhouse active", value=True)
 st.sidebar.caption("Transit peak: 12:24:26 UTC. Keep jump-to-peak on for the live demo.")
 
-if jump:
+if live_mode:
+    when = current_time
+elif jump:
     when = TRANSIT_PEAK_UTC
 else:
     when = datetime(MISSION_DAY.year, MISSION_DAY.month, MISSION_DAY.day, hour, 0, 0, tzinfo=timezone.utc)
@@ -97,7 +107,7 @@ demand_kw = predict_demand(when.hour + when.minute / 60.0, greenhouse)
 risk_level, confidence, proba = predict_risk(percent_blocked, demand_kw)
 sun = get_sun_geometry(when)
 
-st.markdown("# PHOBOS SENTINEL")
+st.markdown("# phobosgrid")
 st.caption(
     "Demand-aware solar microgrid controller  ·  Phobos transit physics (SPICE)  "
     "·  Demand regressor  ·  Risk classifier"
@@ -108,6 +118,65 @@ st.markdown(
     f"<span class='badge'>MARS–SUN {sun['r_au']:.3f} AU</span>",
     unsafe_allow_html=True,
 )
+
+components.html(
+        """
+        <div style="
+            margin: 0.6rem 0 0.9rem;
+            padding: 0.7rem 1rem;
+            border: 1px solid rgba(255, 140, 50, 0.35);
+            border-radius: 12px;
+            background: linear-gradient(90deg, rgba(255,140,50,0.12), rgba(255,140,50,0.03));
+            box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+            font-family: IBM Plex Mono, ui-monospace, monospace;
+            color: #F5E6D3;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        ">
+            <div style="display:flex;flex-direction:column;gap:0.15rem;">
+                <div style="font-size:0.62rem;letter-spacing:0.22em;opacity:0.72;text-transform:uppercase;">Live UTC clock</div>
+                <div style="font-size:0.78rem;opacity:0.82;">Watching the time that drives the solar geometry and moon positions</div>
+            </div>
+            <div id="phobosgrid-top-clock" style="font-size:1.35rem;letter-spacing:0.08em;color:#FF8C32;font-weight:700;white-space:nowrap;">--:--:-- UTC</div>
+        </div>
+        <script>
+            const pad = (value) => String(value).padStart(2, '0');
+            function tickPhobosGridClock() {
+                const now = new Date();
+                const text = `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())} UTC`;
+                const el = document.getElementById('phobosgrid-top-clock');
+                if (el) el.textContent = text;
+            }
+            tickPhobosGridClock();
+            setInterval(tickPhobosGridClock, 1000);
+        </script>
+        """,
+        height=92,
+)
+
+if live_mode:
+        st.caption("Live view is synced to the current UTC clock. The scene animates in-browser, so Mars, Phobos, and the control decision keep moving without page refreshes.")
+        components.html(
+                """
+                <div style="display:flex;align-items:center;gap:0.8rem;margin:0.35rem 0 0.1rem;font-family:IBM Plex Mono, ui-monospace, monospace;color:#F5E6D3;">
+                    <div style="font-size:0.62rem;letter-spacing:0.2em;opacity:0.75;text-transform:uppercase;">Live UTC</div>
+                    <div id="phobosgrid-clock" style="font-size:1.05rem;letter-spacing:0.08em;color:#FF8C32;">--:--:-- UTC</div>
+                </div>
+                <script>
+                    const pad = (value) => String(value).padStart(2, '0');
+                    function tickClock() {
+                        const now = new Date();
+                        const text = `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())} UTC`;
+                        const el = document.getElementById('phobosgrid-clock');
+                        if (el) el.textContent = text;
+                    }
+                    tickClock();
+                    setInterval(tickClock, 1000);
+                </script>
+                """
+            )
 
 r1c1, r1c2 = st.columns(2)
 r1c1.metric("Solar output", f"{solar_now:5.1f} %", delta=f"{-percent_blocked:.1f} pt transit" if percent_blocked else "no dip")
@@ -251,7 +320,6 @@ def build_mars_system_figure(when_utc: datetime, slider_hour: int) -> go.Figure:
     limit = 35.0
     fig_3d.update_layout(
         template="plotly_dark",
-        title=f"Mars system visualized from SPICE at hour {slider_hour:02d}:00 UTC",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=0, t=45, b=0),
@@ -268,10 +336,31 @@ def build_mars_system_figure(when_utc: datetime, slider_hour: int) -> go.Figure:
     )
     return fig_3d
 
+
+def build_mars_system_animation_html(when_utc: datetime) -> str:
+    frame_times = [when_utc + timedelta(seconds=offset) for offset in range(-180, 181, 15)]
+    frames = [go.Frame(data=build_mars_system_figure(frame_time, frame_time.hour).data, name=frame_time.isoformat()) for frame_time in frame_times]
+    animated_figure = build_mars_system_figure(when_utc, when_utc.hour)
+    animated_figure.frames = frames
+    return pio.to_html(
+        animated_figure,
+        full_html=False,
+        include_plotlyjs="cdn",
+        auto_play=True,
+        config={"displayModeBar": True, "responsive": True},
+    )
+
 with st.expander("3D Mars / Phobos system view", expanded=True):
     visual_when = datetime(MISSION_DAY.year, MISSION_DAY.month, MISSION_DAY.day, hour, 0, 0, tzinfo=timezone.utc)
-    st.caption("SPICE-driven J2000 positions synced to the hour slider. Mars is intentionally enlarged for presentation clarity.")
-    st.plotly_chart(build_mars_system_figure(visual_when, hour), width="stretch")
+    st.markdown(
+        f"<div style='margin:0.15rem 0 0.4rem;font-family:IBM Plex Mono, ui-monospace, monospace;font-size:0.92rem;letter-spacing:0.08em;color:#F5E6D3;'>Mars system visualized from SPICE at hour {hour:02d}:00 UTC</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("SPICE-driven J2000 positions synced to the hour slider. Mars is intentionally enlarged for presentation clarity. The preview auto-plays a short, slow SPICE window around the current moment.")
+    if live_mode:
+        components.html(build_mars_system_animation_html(current_time), height=650, scrolling=False)
+    else:
+        st.plotly_chart(build_mars_system_figure(visual_when, hour), width="stretch")
 
 
 @st.cache_data(show_spinner="Computing 24h SPICE / pvlib timeline…")
@@ -297,136 +386,6 @@ def mission_day_series() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
-
-
-@st.cache_data(show_spinner=False)
-def _visual_mission_time(hour_of_day: int) -> datetime:
-    return datetime(MISSION_DAY.year, MISSION_DAY.month, MISSION_DAY.day, int(hour_of_day), 0, 0, tzinfo=timezone.utc)
-
-
-@st.cache_data(show_spinner=False)
-def _starfield(seed: int = 17, count: int = 180) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    azimuth = rng.uniform(0.0, 2.0 * np.pi, count)
-    inclination = np.arccos(rng.uniform(-1.0, 1.0, count))
-    radius = rng.uniform(45.0, 72.0, count)
-    x = radius * np.sin(inclination) * np.cos(azimuth)
-    y = radius * np.sin(inclination) * np.sin(azimuth)
-    z = radius * np.cos(inclination)
-    return pd.DataFrame({"x": x, "y": y, "z": z})
-
-
-def _sphere_surface(center: tuple[float, float, float], radius: float, color: str, name: str) -> go.Surface:
-    phi = np.linspace(0.0, 2.0 * np.pi, 36)
-    theta = np.linspace(0.0, np.pi, 18)
-    x = center[0] + radius * np.outer(np.cos(phi), np.sin(theta))
-    y = center[1] + radius * np.outer(np.sin(phi), np.sin(theta))
-    z = center[2] + radius * np.outer(np.ones_like(phi), np.cos(theta))
-    return go.Surface(
-        x=x,
-        y=y,
-        z=z,
-        name=name,
-        showscale=False,
-        hoverinfo="skip",
-        colorscale=[[0.0, color], [1.0, color]],
-        surfacecolor=np.zeros_like(x),
-        opacity=1.0,
-        lighting=dict(ambient=0.88, diffuse=0.72, roughness=0.8, specular=0.12, fresnel=0.18),
-    )
-
-
-def _mars_moon_positions(when_utc: datetime) -> dict[str, np.ndarray]:
-    load_kernels()
-    et = spice.datetime2et(when_utc)
-    phobos_vec, _ = spice.spkpos("PHOBOS", et, "J2000", "NONE", "MARS")
-    deimos_vec, _ = spice.spkpos("DEIMOS", et, "J2000", "NONE", "MARS")
-    return {
-        "phobos": np.asarray(phobos_vec, dtype=float) * VISUAL_SCALE,
-        "deimos": np.asarray(deimos_vec, dtype=float) * VISUAL_SCALE,
-    }
-
-
-def build_mars_system_figure(when_utc: datetime, slider_hour: int) -> go.Figure:
-    positions = _mars_moon_positions(when_utc)
-    mars_radius = MARS_RADIUS_KM * VISUAL_SCALE
-    stars = _starfield()
-
-    fig_3d = go.Figure()
-    fig_3d.add_trace(_sphere_surface((0.0, 0.0, 0.0), mars_radius, "#CC5C2E", "Mars"))
-    fig_3d.add_trace(
-        go.Scatter3d(
-            x=stars["x"],
-            y=stars["y"],
-            z=stars["z"],
-            mode="markers",
-            name="Stars",
-            marker=dict(size=2, color="rgba(255,255,255,0.55)", opacity=0.55),
-            hoverinfo="skip",
-        )
-    )
-    fig_3d.add_trace(
-        go.Scatter3d(
-            x=[positions["phobos"][0]],
-            y=[positions["phobos"][1]],
-            z=[positions["phobos"][2]],
-            mode="markers+text",
-            name="Phobos",
-            marker=dict(size=7, color="#A5A29E", symbol="circle"),
-            text=["Phobos"],
-            textposition="top center",
-            textfont=dict(color="#D9D5CF", size=11, family="Courier New"),
-            hovertemplate="Phobos<br>x %{x:.2f}<br>y %{y:.2f}<br>z %{z:.2f}<extra></extra>",
-        )
-    )
-    fig_3d.add_trace(
-        go.Scatter3d(
-            x=[positions["deimos"][0]],
-            y=[positions["deimos"][1]],
-            z=[positions["deimos"][2]],
-            mode="markers+text",
-            name="Deimos",
-            marker=dict(size=6, color="#8E857A", symbol="circle"),
-            text=["Deimos"],
-            textposition="top center",
-            textfont=dict(color="#D9D5CF", size=10, family="Courier New"),
-            hovertemplate="Deimos<br>x %{x:.2f}<br>y %{y:.2f}<br>z %{z:.2f}<extra></extra>",
-        )
-    )
-    fig_3d.add_trace(
-        go.Scatter3d(
-            x=[0.0, positions["phobos"][0]],
-            y=[0.0, positions["phobos"][1]],
-            z=[0.0, positions["phobos"][2]],
-            mode="lines",
-            name="Phobos vector",
-            line=dict(color="rgba(165,162,158,0.35)", width=2),
-            hoverinfo="skip",
-            showlegend=False,
-        )
-    )
-
-    limit = 35.0
-    fig_3d.update_layout(
-        template="plotly_dark",
-        title=f"Mars system visualized from SPICE at hour {slider_hour:02d}:00 UTC",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=45, b=0),
-        legend=dict(orientation="h", y=1.02, x=0.02),
-        scene=dict(
-            bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(visible=False, range=[-limit, limit], showbackground=False),
-            yaxis=dict(visible=False, range=[-limit, limit], showbackground=False),
-            zaxis=dict(visible=False, range=[-limit, limit], showbackground=False),
-            aspectmode="data",
-            camera=dict(eye=dict(x=1.8, y=1.5, z=0.9), center=dict(x=0.0, y=0.0, z=-0.05)),
-        ),
-        showlegend=False,
-    )
-    return fig_3d
-
-
 df = mission_day_series()
 
 fig = go.Figure()

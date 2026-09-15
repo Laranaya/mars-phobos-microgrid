@@ -1,4 +1,4 @@
-# PHOBOS SENTINEL
+# phobosgrid
 
 Demand-aware solar microgrid control for a Mars settlement.
 
@@ -6,7 +6,7 @@ Built for the GirlsWhoML x PhysicsX Mars Hackathon. This project is in the **Lif
 
 ## What it does
 
-PHOBOS SENTINEL is a Streamlit dashboard for a Mars settlement microgrid. It combines real orbital geometry with lightweight machine learning to answer one operational question:
+phobosgrid is a Streamlit dashboard for a Mars settlement microgrid. It combines real orbital geometry with lightweight machine learning to answer one operational question:
 
 **When Phobos dims the Sun, how should the settlement respond?**
 
